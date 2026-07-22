@@ -110,12 +110,20 @@ def new_way_to_create_chain():
     """
     Universal way to create a chain using LCEL and Runnables.
     """
-    model = init_chat_model(model_provider="anthropic", model="claude-haiku-4-5", temperature=0.7, max_tokens=1024)  # Initialize the chat model
+    model = init_chat_model(
+        model_provider="anthropic",
+        model="claude-haiku-4-5",
+        temperature=0.7,
+        max_tokens=1024,
+        timeout=60,
+        max_retries=3)  # Initialize the chat model
+    
     chain = (
         ChatPromptTemplate.from_template("You are a helpful assistant. Respond in one sentence to the following input: {input}")
         | model
         | StrOutputParser()
     )  # Create a chain using the pipe operator
+    
     result = chain.invoke({"input": "What is the capital of France?"})  # Execute the chain with an input
     print("Response:", result)  # Print the result
 
