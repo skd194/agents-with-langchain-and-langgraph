@@ -1,6 +1,9 @@
 langchain
 langchain-core
+langchain-community
 langgraph
 langchain-openai
 langchain-anthropic
 python-dotenv
+beautifulsoup4
+pypdf

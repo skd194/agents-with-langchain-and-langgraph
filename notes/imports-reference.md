@@ -20,6 +20,24 @@ from importlib.metadata import version
 version("langchain-core")   # -> '0.3.x'
 ```
 
+Operating-system utilities (e.g. delete a temp file after loading).
+```python
+import os
+os.remove(temp_file_path)
+```
+
+Create temporary files to demo loaders without shipping fixtures.
+```python
+import tempfile
+tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+```
+
+Filesystem path handling.
+```python
+from pathlib import Path
+Path("docs/report.pdf")
+```
+
 ## Environment & TLS
 
 Load API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) from `.env` into the environment.
@@ -144,6 +162,44 @@ Conditional routing; first `True` condition wins, else default.
 ```python
 from langchain_core.runnables import RunnableBranch
 RunnableBranch((is_code, code_chain), default_chain)
+```
+
+## Documents & loaders
+
+The core `Document` type (`page_content` + `metadata`); usually produced by loaders, can be built by hand.
+```python
+from langchain_core.documents import Document
+Document(page_content="...", metadata={"source": "a.txt"})
+```
+
+Load a plain-text file into `Document` objects.
+```python
+from langchain_community.document_loaders import TextLoader
+TextLoader("notes.txt").load()   # -> list[Document]
+```
+
+Scrape web page(s) into `Document` objects (needs BeautifulSoup).
+```python
+from langchain_community.document_loaders import WebBaseLoader
+WebBaseLoader("https://example.com").load()
+```
+
+Load many files from a folder in bulk.
+```python
+from langchain_community.document_loaders import DirectoryLoader
+DirectoryLoader("docs/", glob="**/*.txt", loader_cls=TextLoader).load()
+```
+
+Load a PDF into per-page `Document` objects (needs `uv add pypdf`).
+```python
+from langchain_community.document_loaders import PyPDFLoader
+PyPDFLoader("report.pdf").load()
+```
+
+HTML/XML parser backing `WebBaseLoader`; install via `uv add bs4`.
+```python
+from bs4 import BeautifulSoup
+BeautifulSoup(html, "html.parser")
 ```
 
 ## Embeddings
