@@ -207,3 +207,279 @@ system_prompt ("You are a {role}")  +  user_prompt ("{question}")  →  full_pro
 - **Maintainability** — update once, applies everywhere.
 
 Seen in the few-shot example above: `system` + `few_shot_prompt` + `human` are three independent blocks composed into one `final_prompt`.
+
+---
+
+## Chains with LCEL
+
+**LCEL** (LangChain Expression Language) is the current standard. The legacy `LLMChain` / `SequentialChain` / `TransformChain` classes are **deprecated** — don't use them.
+
+```python
+chain = prompt | model | parser      # a RunnableSequence
+```
+
+- The `|` pipe builds a **RunnableSequence**; data flows **left → right**.
+- Each step's output feeds the next: `input → prompt.invoke → model.invoke → parser.invoke → output`.
+- The chain is itself a runnable, composed of runnables → **composable all the way down**.
+
+## Composition patterns — in detail
+
+All examples from `005_chains_v1.py`. The building blocks:
+
+| Runnable | What it does | Output |
+|----------|--------------|--------|
+| `RunnableSequence` (the `\|` pipe) | Runs steps left→right, each output feeds the next | Output of the **last** step |
+| `RunnableParallel` | Runs several branches on the **same input** concurrently | A **dict** — one key per branch |
+| `RunnableLambda` | Wraps a plain Python function so it can live inside a chain | Whatever your function returns |
+| `RunnablePassthrough` | Identity — forwards its input **unchanged** | Its input, as-is |
+| `RunnableBranch` | Conditional routing — runs the first chain whose condition is `True`, else a default | Output of the chosen chain |
+
+### What is `RunnableLambda`?
+
+**A wrapper that turns any ordinary Python function into a runnable**, so your own logic can sit inside an LCEL pipe alongside prompts, models, and parsers.
+
+**Why it's needed:** the `|` pipe only connects *runnables*. A plain function (`def f(x): ...` or a `lambda`) is **not** a runnable, so you can't drop it into a chain directly. `RunnableLambda(f)` adapts it — now it has `.invoke()` / `.batch()` / `.stream()` like everything else.
+
+**How it works:**
+
+```
+prev step's output ──▶ RunnableLambda(f) ──▶ f(output) ──▶ next step
+```
+
+- The wrapped function takes **exactly one argument** — whatever the previous step produced.
+- Whatever it **returns** becomes the input to the next step.
+- No decorators, no subclassing — just wrap and pipe.
+
+```python
+RunnableLambda(lambda x: x.upper())     # input "hi"  -> output "HI"
+RunnableLambda(fake_retriever)          # input dict  -> whatever the function returns
+```
+
+**Two typical jobs** (both seen in the pass-through example below):
+1. **Call your own code inside a chain** — e.g. `RunnableLambda(fake_retriever)` runs a retriever function as a step.
+2. **Reshape data between steps** — e.g. `RunnableLambda(lambda inputs: {...})` flattens/renames keys so the next runnable (a prompt) gets exactly the variables it expects.
+
+---
+
+### 1. Basic (sequence) chain
+
+```python
+prompt = ChatPromptTemplate.from_template("Summarize the following text in one sentence: {text}")
+parser = StrOutputParser()
+chain  = prompt | model | parser
+result = chain.invoke({"text": "LangChain is a framework ..."})   # -> str
+```
+
+**What actually happens** (data flows left → right):
+
+```
+{"text": ...}
+   │  prompt.invoke  → fills template → PromptValue (a list of messages)
+   ▼
+   model.invoke      → sends messages to LLM → AIMessage
+   ▼
+   parser.invoke     → unwraps AIMessage.content → plain string
+```
+
+Each step's output is the next step's input. The whole `chain` is itself a runnable → it also has `.batch()` / `.stream()`.
+
+---
+
+### 2. Parallel chain — `RunnableParallel`
+
+Run several independent chains on the **same input** at once.
+
+```python
+from langchain_core.runnables import RunnableParallel
+
+analysis_chain = RunnableParallel(
+    summary   = summarize_prompt | model | parser,
+    sentiment = sentiment_prompt | model | parser,
+    keywords  = keywords_prompt  | model | parser,
+)
+result = analysis_chain.invoke({"text": text})
+# result -> {"summary": "...", "sentiment": "...", "keywords": "..."}
+for key, value in result.items():
+    print(key, value)
+```
+
+**What actually happens:**
+
+```
+                 ┌─▶ summary branch   (prompt|model|parser) ─┐
+{"text": text} ──┼─▶ sentiment branch (prompt|model|parser) ─┼─▶ {"summary":..., "sentiment":..., "keywords":...}
+                 └─▶ keywords branch  (prompt|model|parser) ─┘
+                     (all three run concurrently)
+```
+
+- **Output = a dict**, keys = the argument names (`summary`, `sentiment`, `keywords`); values = each branch's result.
+- Every branch receives the **same** input dict (`{"text": text}`).
+- Concurrent, not sequential → faster than three separate `.invoke()` calls.
+- `analysis_chain` is itself a runnable → nest it inside larger chains freely.
+
+---
+
+### 3. Pass-through chain — RAG shape (`RunnablePassthrough` + `RunnableLambda`)
+
+The pattern for keeping the **original question** while also attaching **retrieved context**.
+
+```python
+prompt = ChatPromptTemplate.from_template(
+    "Original question: {question}\nContext: {context}\nAnswer the question based on the context.")
+
+def fake_retriever(input_dict):                 # stands in for a real vector-store retriever
+    return "LangChain was created by Harrison Chase in 2022."
+
+chain = (
+    RunnableParallel(
+        context  = RunnableLambda(fake_retriever),   # fetch context
+        question = RunnablePassthrough(),            # forward input unchanged
+    )
+    | RunnableLambda(lambda inputs: {                # reshape into flat prompt vars
+        "question": inputs["question"]["question"],
+        "context":  inputs["context"],
+      })
+    | prompt
+    | model
+    | StrOutputParser()
+)
+result = chain.invoke({"question": "Who created LangChain?"})
+```
+
+**Step-by-step — what each stage produces:**
+
+```
+invoke {"question": "Who created LangChain?"}
+
+① RunnableParallel
+   context  = fake_retriever(input) = "LangChain was created by ..."
+   question = Passthrough()         = {"question": "Who created LangChain?"}   ← whole input!
+   ⇒ {"context": "...", "question": {"question": "Who created LangChain?"}}
+
+② RunnableLambda (flatten)
+   ⇒ {"question": "Who created LangChain?", "context": "..."}
+
+③ prompt  → fills {question} & {context} → messages
+④ model   → AIMessage
+⑤ parser  → "LangChain was created by Harrison Chase in 2022."
+```
+
+- **What is the "input dict"?** It's whatever you pass to `chain.invoke(...)` — here `{"question": "Who created LangChain?"}`. That same dict is handed to **every branch** of the `RunnableParallel` as their argument:
+  - `fake_retriever(input_dict)` receives `{"question": "..."}` (it ignores it and returns fixed text; a real retriever would read `input_dict["question"]` to search).
+  - `RunnablePassthrough()` receives the same `{"question": "..."}` and returns it untouched.
+  - So the parameter name `input_dict` is just the branch's view of the original `.invoke()` payload — a plain Python `dict`, not anything LangChain-specific.
+- **Why the nested `inputs["question"]["question"]`?** `RunnablePassthrough` forwards the *entire* input dict, so under key `question` you get `{"question": ...}` — the lambda flattens it back out.
+- **Why the pattern matters:** a real retriever turns the query into *documents* and loses the original wording. Pass-through preserves the question so the prompt gets **both** the context and the real question.
+- Everything is composable — swap `fake_retriever` for a real one, or add more branches, without changing the shape.
+
+---
+
+### 4. Branching chain — `RunnableBranch`
+
+Conditional routing: pick which sub-chain runs based on the input (like `if / elif / else`).
+
+```python
+from langchain_core.runnables import RunnableBranch
+
+# Dedicated classifier model at temperature=0 → deterministic label (not the 0.7 answer model)
+classifier_model = init_chat_model(model="gpt-4o-mini", model_provider="openai", temperature=0)
+classifier = classifier_prompt | classifier_model | StrOutputParser()   # returns "code" or "general"
+
+def is_code_question(input_dic):                 # a condition = function returning True/False
+    classification = classifier.invoke(input_dic)
+    return "code" in classification.lower()
+
+branch = RunnableBranch(
+    (is_code_question,                           # (condition, chain)
+     code_prompt | model | StrOutputParser()
+     | RunnableLambda(lambda x: {"branch": "code", "answer": x})),
+    general_prompt | model | StrOutputParser()   # default (last arg, no condition)
+     | RunnableLambda(lambda x: {"branch": "general", "answer": x}),
+)
+
+result = branch.invoke({"input": "How do I write a for loop in Python?"})
+print(result["branch"], result["answer"])        # -> "code", "Certainly! In Python..."
+```
+
+**What actually happens:**
+
+```
+{"input": q}
+   │
+   ▼  is_code_question(input)?  ── True ──▶ code_prompt    | model | parser | tag("code")
+   │                             └ False ─▶ general_prompt | model | parser | tag("general")
+   ▼
+ {"branch": <route>, "answer": <str>}
+```
+
+- `RunnableBranch` takes `(condition, runnable)` pairs, then a final **default** runnable with no condition.
+- Conditions are checked **top to bottom**; the first `True` wins and its chain runs. If none match → default.
+- Each condition is a function `input -> bool`; here it calls the LLM classifier to decide the route.
+- **Deterministic routing:** the classifier uses its own `temperature=0` model so the label is stable, while the answer model can stay creative (`0.7`).
+- **Tag the route:** a trailing `RunnableLambda` wraps each branch's output into `{"branch": ..., "answer": ...}`, so the caller can see *which* path ran, not just the text.
+- **Cost note:** this pattern makes **two LLM calls per request** — ① the classifier (picks the route) + ② the selected chain (produces the answer).
+
+## Debugging chains
+
+**High-level levels:**
+
+| Level | How | Use |
+|-------|-----|-----|
+| **Logging** | `set_debug(True)` | Quick step-by-step prints in the console |
+| **Callbacks** | custom handler classes | Intercept & log each step; flexible/customizable |
+| **LangSmith** | tracing platform | Full observability — traces, cost, evaluation (recommended) |
+
+**Practical methods** (`005_chains_v1.py`, `demo_debbuging`):
+
+### Method 1 — inspect the schema
+
+See exactly what a chain expects as input and produces as output — verify its interface before wiring it up.
+
+```python
+chain = prompt | model | StrOutputParser()
+
+print(chain.input_schema.model_json_schema())    # e.g. {name: str}  (from the prompt)
+print(chain.output_schema.model_json_schema())   # StrOutputParserOutput -> string
+```
+
+- `.model_json_schema()` gives the **full** JSON schema (fields, types, required); the bare `input_schema` object shows just the type.
+- Tells you what types flow in/out — the first thing to check when a chain errors on integration.
+
+### Method 2 — `with_config` for tracing
+
+Attach a run name (and tags/metadata) so the execution is identifiable in logs/LangSmith.
+
+```python
+result = chain.with_config(run_name="greeting_chain").invoke({"name": "Alice"})
+```
+
+- `with_config(...)` returns the same chain with metadata attached — doesn't change behavior.
+- Useful for labelling runs and passing tags/metadata through to observability tooling.
+
+### Method 3 — inspect intermediate steps (the "tap")
+
+Insert `RunnableLambda` loggers *between* steps to see the data at each stage.
+
+```python
+def log_step(x, step_name=""):
+    print(f"[{step_name}] {type(x).__name__}: {str(x)[:100]}")
+    return x                                  # ← MUST return x unchanged
+
+debug_chain = (
+    prompt
+    | RunnableLambda(lambda x: log_step(x, "after_prompt"))   # logs PromptValue
+    | model
+    | RunnableLambda(lambda x: log_step(x, "after_model"))    # logs AIMessage
+    | StrOutputParser()
+)
+debug_chain.invoke({"name": "Debug"})
+```
+
+```
+prompt ─▶ [tap: after_prompt] ─▶ model ─▶ [tap: after_model] ─▶ parser
+              logs & forwards              logs & forwards
+```
+
+- A **tap** = sees the data, logs it, **passes it through unchanged**.
+- `return x` is essential — the lambda must forward the value so the next step still receives it; without it the chain breaks.
+- Lets you watch each transformation (e.g. `after_prompt` → `ChatPromptValue`, `after_model` → `AIMessage`).
