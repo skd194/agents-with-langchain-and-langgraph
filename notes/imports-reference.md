@@ -32,6 +32,12 @@ import tempfile
 tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
 ```
 
+High-level file operations (copy/move/delete trees).
+```python
+import shutil
+shutil.rmtree("./chroma_db/")
+```
+
 Filesystem path handling.
 ```python
 from pathlib import Path
@@ -202,12 +208,68 @@ from bs4 import BeautifulSoup
 BeautifulSoup(html, "html.parser")
 ```
 
-## Embeddings
+## Text splitters (`langchain_text_splitters`)
+
+Default splitter; cuts on a separator hierarchy (paragraph → line → space → char).
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+```
+
+Simpler splitter that cuts on a single separator.
+```python
+from langchain_text_splitters import CharacterTextSplitter
+CharacterTextSplitter(separator="\n\n", chunk_size=500)
+```
+
+Split by token count (not characters).
+```python
+from langchain_text_splitters import TokenTextSplitter
+TokenTextSplitter(chunk_size=200, chunk_overlap=20)
+```
+
+Split Markdown by header levels, keeping headers as metadata.
+```python
+from langchain_text_splitters import MarkdownHeaderTextSplitter
+MarkdownHeaderTextSplitter(headers_to_split_on=[("#", "h1"), ("##", "h2")])
+```
+
+Enum of programming languages for code-aware splitting.
+```python
+from langchain_text_splitters import Language
+RecursiveCharacterTextSplitter.from_language(language=Language.PYTHON, chunk_size=500)
+```
+
+## Embeddings & vector stores
 
 Turn text into vectors via OpenAI embedding models.
 ```python
 from langchain_openai.embeddings import OpenAIEmbeddings
 OpenAIEmbeddings(model="text-embedding-3-small").embed_query("hi")
+```
+
+Local vector store (Chroma) — persist & similarity-search embeddings (`uv add langchain-chroma`).
+```python
+from langchain_chroma import Chroma
+Chroma.from_documents(documents=docs, embedding=model, persist_directory="./chroma_db/")
+```
+
+Numeric ops on vectors — norm (magnitude) and cosine similarity.
+```python
+import numpy as np
+np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+```
+
+Cache embeddings so identical text isn't re-embedded (moved to `langchain-classic` in LC 1.0).
+```python
+from langchain_classic.embeddings.cache import CacheBackedEmbeddings
+CacheBackedEmbeddings.from_bytes_store(underlying_embeddings=model, document_embedding_cache=store)
+```
+
+On-disk key/value store backing the embedding cache.
+```python
+from langchain_classic.storage import LocalFileStore
+LocalFileStore(root_path=tempdir)
 ```
 
 ---

@@ -199,19 +199,29 @@ Loaded documents are often too big to embed or feed to an LLM, so **text splitte
 
 ### RecursiveCharacterTextSplitter (default)
 
-Splits on a **priority of separators**, backing off only when needed: **paragraphs (`\n\n`) → lines (`\n`) → spaces → characters**.
+The go-to splitter (`007_text_splitters.py`, `recursive_splitter`). Splits on a **priority of separators**, backing off only when needed: **paragraphs (`\n\n`) → lines (`\n`) → spaces → characters**. This preserves **semantic coherence** — it keeps paragraphs whole first, then sentences, then words, so text isn't cut mid-thought.
 
 ```python
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,      # max chars/tokens per chunk
-    chunk_overlap=200,    # chars/tokens shared between adjacent chunks
+    chunk_size=500,       # max length per chunk (see unit note below)
+    chunk_overlap=50,     # length shared between adjacent chunks
     separators=["\n\n", "\n", " ", ""],   # where to cut, in priority order
 )
-chunks = splitter.split_documents(documents)
+
+chunks = splitter.split_text(sample_text)          # raw string  -> list[str]
+chunks = splitter.split_documents(documents)       # Document(s) -> list[Document] (keeps metadata)
 ```
 
+- **`split_text` vs `split_documents`:** use `split_text` for a plain string, `split_documents` for loaded `Document` objects (it carries metadata through to each chunk).
+
+- **Unit = characters by default.** `chunk_size` / `chunk_overlap` are measured by the splitter's `length_function`, which defaults to `len` (character count). So `chunk_size=1000` ≈ 1000 characters.
+- **Count in tokens instead** with the tiktoken factory — then the numbers mean tokens:
+  ```python
+  splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+      chunk_size=1000, chunk_overlap=200)   # now 1000 = tokens
+  ```
 - **`chunk_overlap`** repeats a slice of the end of one chunk at the start of the next → preserves context across boundaries. Bigger overlap = more context retained, but more redundancy — keep it balanced.
 
 ```
@@ -229,7 +239,107 @@ chunk3             ░░░▓▓▓▓▓▓▓
 | Code | 1500–2000 | 200 | Whole functions stay intact |
 | Books / articles | 800–1200 | 150 | Balanced |
 
-> Guidelines only — tune to your use case.
+> Guidelines only — tune to your use case. **Units are characters** with the default splitter (use `from_tiktoken_encoder` if you want these numbers to mean tokens).
+
+### Chunk size in practice (`chunk_size_comparison`)
+
+Smaller size → more chunks; larger size → fewer, fatter chunks. On the same ~889-char sample (overlap = 20% of size):
+
+| `chunk_size` | # chunks | Trade-off |
+|--------------|----------|-----------|
+| 200 | 6 | Precise retrieval, but little context per chunk |
+| 500 | 3 | **Sweet spot** — balanced |
+| 1000 | 1 | One blob: lots of context, imprecise retrieval |
+
+```python
+for size in [200, 500, 1000]:
+    splitter = RecursiveCharacterTextSplitter(chunk_size=size, chunk_overlap=size // 5)
+    print(size, len(splitter.split_text(sample_text)))
+```
+
+> There's **no universal best size** — experiment per document type, query patterns, and LLM context window. Chunk size directly impacts retrieval quality.
+
+### Why overlap matters (`overlap_importance`)
+
+Overlap repeats the tail of one chunk at the head of the next, so a thought split across a boundary isn't lost.
+
+```python
+no_overlap   = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=0)
+with_overlap = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=20)
+```
+
+```
+no overlap:    [ ...the lazy dog. ][ The quick brown... ]   (clean cut, context orphaned)
+with overlap:  [ ...the lazy dog. ][ the lazy dog. The quick... ]   (shared phrase carried over)
+```
+
+**Why it's "cheap insurance":** without overlap, related info can land in different chunks:
+- *Chunk 1:* "The API key expires after 24 hours." (mentions the problem, no fix)
+- *Chunk 2:* "You must refresh it using the token endpoint." (the fix, doesn't mention expiration)
+
+A query like *"how do I handle API expiration?"* matches Chunk 1 (has "expiration") but **misses the solution** in Chunk 2. With overlap, Chunk 2 also carries the "expires after 24 hours" phrase → the retriever pulls the chunk that has **both** problem and solution.
+
+> Overlap ensures important phrases aren't orphaned at boundaries — the difference between finding *an* answer and finding a *complete* answer.
+
+### Markdown header splitter (`markdown_splitter`)
+
+Splits on **Markdown headers** instead of raw length — great for structured docs (READMEs, wikis, documentation). Each chunk keeps its header path as **metadata**, so you know *where* the content came from.
+
+```python
+from langchain_text_splitters import MarkdownHeaderTextSplitter
+
+splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[
+    ("#", "h1"), ("##", "h2"), ("###", "h3"),
+])
+chunks = splitter.split_text(sample_markdown)   # -> list[Document]
+
+for c in chunks:
+    print(c.metadata)        # e.g. {"h1": "Introduction to Machine Learning", "h2": "..."}
+    print(c.page_content)
+```
+
+- Output is `Document`s whose `metadata` captures the header hierarchy (h1/h2/h3) each chunk sits under.
+- **Preserves context, not just content** — a chunk "knows" it belongs to, say, *Introduction → Types → Unsupervised Learning*.
+- Use when documents have structure; combine with a length splitter afterward if sections are still too big.
+
+### Code splitter (`code_splitter`)
+
+Code needs **syntax-aware** splitting so functions/classes stay intact instead of being cut mid-body. Use `RecursiveCharacterTextSplitter.from_language(...)` with a `Language` enum.
+
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+
+splitter = RecursiveCharacterTextSplitter.from_language(
+    language=Language.PYTHON,          # also JAVA, C, COBOL, JS, ...
+    chunk_size=500, chunk_overlap=50,
+)
+chunks = splitter.split_text(sample_code)
+```
+
+- `from_language` picks separators tuned to that language (defs, classes, blocks) → each chunk keeps a **whole function/class** with its name.
+- On the sample, two functions → two clean chunks, each retaining its definition → a code query retrieves a coherent, complete function.
+- The key move: **always pass the language** so the splitter respects syntax and doesn't cut mid-function.
+
+### End-to-end: loader → splitter (`document_splitter`)
+
+The real-world flow — load real files into `Document`s, then split them with `split_documents` (metadata carries through automatically).
+
+```python
+from langchain_community.document_loaders import PyPDFLoader
+
+docs = PyPDFLoader("./docs/langchain_demo.pdf").load()   # 3 pages -> 3 Documents
+
+splitter   = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+split_docs = splitter.split_documents(docs)              # -> 9 Document chunks
+
+print(len(docs), "->", len(split_docs))       # 3 -> 9
+print(split_docs[0].metadata)                 # source, page, total_pages, producer, ...
+print(split_docs[0].page_content[:200])
+```
+
+- `split_documents` (not `split_text`) is what you use once data is loaded — it keeps each chunk's `metadata` (source, page, etc.) from the loader.
+- Loader + splitter compose cleanly: `PyPDFLoader` gives per-page `Document`s, the splitter breaks those into the ~500-char chunks you'll embed.
+- This is exactly the shape feeding the RAG indexing pipeline → [05-rag-and-embeddings.md](05-rag-and-embeddings.md).
 
 ### Semantic chunking
 
@@ -240,6 +350,12 @@ mixed doc (ML + food + ...) ──▶ semantic chunker ──▶ [ML chunk] [foo
 ```
 
 - Best when a document mixes **distinct topics**.
-- **Costs embedding API calls** (it embeds to measure similarity) — not always necessary; use fixed-size splitting otherwise.
+
+**Why it costs embedding API calls:**
+- Fixed-size splitters (`RecursiveCharacterTextSplitter`) are purely **mechanical** — they count characters and cut on separators. No model, no network → free and instant, runs fully local.
+- Semantic chunking must **embed every sentence first** to compare their meanings and decide where topics change. If your embedding model is hosted (e.g. OpenAI), each of those embeddings is a **billed API call** — so you pay money + wait on network latency, at index time, across the whole corpus.
+- That's *extra* embedding work: you embed sentences to find boundaries, then still embed the final chunks to store them in the vector DB.
+
+**So:** only reach for semantic chunking when cleaner topic boundaries actually improve retrieval (mixed-topic docs). For most cases, fixed-size splitting is cheaper, faster, and good enough. (A **local** embedding model — see [05-rag-and-embeddings.md](05-rag-and-embeddings.md) — removes the per-call cost but not the added compute/time.)
 
 *TODO: add the splitter code once the course implements it (this section is the concept overview).*

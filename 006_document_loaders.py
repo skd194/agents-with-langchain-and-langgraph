@@ -19,7 +19,6 @@ from langchain_community.document_loaders import (
     DirectoryLoader,
     PyPDFLoader,
 )
-from bs4 import BeautifulSoup
 
 load_dotenv()
 

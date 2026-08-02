@@ -25,5 +25,3 @@ print(f"\nEmbeddings for '{texts}': {embeddings_list}")
 
 print("\nEmbedding vector lengths:", [len(e) for e in embeddings_list])
 
-
-from langchain_community. import Embeddings

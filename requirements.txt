@@ -7,3 +7,4 @@ langchain-anthropic
 python-dotenv
 beautifulsoup4
 pypdf
+langchain-chroma
