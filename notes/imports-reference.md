@@ -44,6 +44,19 @@ from pathlib import Path
 Path("docs/report.pdf")
 ```
 
+Type hints (e.g. a list of strings in a structured-output schema).
+```python
+from typing import List
+sources_used: List[str]
+```
+
+Define structured-output schemas (fields + descriptions) for the LLM to fill.
+```python
+from pydantic import BaseModel, Field
+class RAGResponse(BaseModel):
+    answer: str = Field(description="The answer")
+```
+
 ## Environment & TLS
 
 Load API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) from `.env` into the environment.
@@ -76,6 +89,12 @@ Provider-agnostic factory; pick model/provider by string.
 ```python
 from langchain.chat_models import init_chat_model
 init_chat_model("anthropic:claude-haiku-4-5")
+```
+
+Direct OpenAI chat-model wrapper (when you specifically want OpenAI).
+```python
+from langchain_openai import ChatOpenAI
+ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 ```
 
 ## Prompts

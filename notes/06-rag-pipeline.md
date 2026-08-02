@@ -38,6 +38,47 @@ chain = (
 - **question** goes through `RunnablePassthrough()` — kept original/unchanged (see [03-working-with-llms.md](03-working-with-llms.md)).
 - Both feed the prompt together — context and question go hand in hand.
 
+### In code (`013_rag_pipeline.py`)
+
+**1. Build the knowledge base** (`create_kb`) — split → embed → store, returns a vector store:
+
+```python
+def create_kb():
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    doc      = Document(page_content=KNOWLEDGE_BASE, metadata={"source": "langchain_knowledge_base.md"})
+    chunks   = splitter.split_documents([doc])
+    return Chroma.from_documents(documents=chunks, embedding=embeddings_model,
+                                 persist_directory=tempfile.mkdtemp())
+```
+
+**2. The RAG chain** (`demo_basic_rag`):
+
+```python
+retriever = create_kb().as_retriever(search_type="similarity", search_kwargs={"k": 2})
+
+prompt = ChatPromptTemplate.from_template(
+    "Answer the question based only on the following context:\n\n{context}\n\n"
+    "Question: {question}\n\nAnswer:\n"
+    'Answer concisely, and if you don\'t know, just say "I don\'t know."')
+
+def format_docs(docs):                       # join retrieved chunks into one string
+    return "\n\n".join(doc.page_content for doc in docs)
+
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+rag_chain.invoke("Who created LangChain?")   # -> grounded answer string
+```
+
+- **`retriever | format_docs`** — the retriever returns `list[Document]`; `format_docs` (a plain function, auto-wrapped as a `RunnableLambda` in the pipe) flattens them into the `{context}` string.
+- The input dict keys (`context`, `question`) match the prompt's `{variables}`.
+- `invoke(question)` takes a **plain string** — `RunnablePassthrough` forwards it to `{question}`, and it's also what the retriever searches with.
+- Flow: `question → retrieve+format context / passthrough question → prompt → llm → string`.
+
 ## Grounding the prompt (anti-hallucination)
 
 Instructions matter. A grounding pattern:
