@@ -1,31 +1,82 @@
 # 2. Basic LangChain
 
-> **Quick recall:** Everything in LangChain V1 is a **Runnable** with `invoke / batch / stream`. Compose them with LCEL's `|` pipe. Talk to chat models via **role-based messages**, not plain strings.
+> **Quick recall:** Everything in LangChain V1 is a **Runnable** with `invoke / batch / stream`. Compose them with **LCEL** (LangChain Expression Language) — the `|` pipe. Talk to chat models via **role-based messages**, not plain strings.
 
 **Section covers:** LLMs & chat models · prompt templates · few-shot prompting · structured responses
+
+---
+
+## Why LangChain?
+
+A raw LLM is just *text in → text out*. Real apps need much more around that call, and writing it by hand for every provider is repetitive and brittle. LangChain gives you **reusable building blocks with one common interface** so you can:
+
+- **Swap providers** freely (OpenAI ↔ Anthropic ↔ local) without rewriting logic.
+- **Structure prompts** (templates, few-shot, roles) instead of string-mashing.
+- **Chain steps** together (prompt → model → parser → …) cleanly with LCEL.
+- **Connect your data** via RAG (loaders, splitters, embeddings, vector stores).
+- **Add memory, tools, streaming, retries, and tracing** without boilerplate.
+
+**LangGraph** goes further: when a workflow needs **state, branching, loops/cycles, human-in-the-loop, or multiple agents**, LangGraph orchestrates it (LCEL chains are linear; LangGraph handles the complex, stateful graphs).
+
+### What can you build?
+
+| With LangChain (chains) | With LangGraph (stateful/agentic) |
+|-------------------------|-----------------------------------|
+| Chatbots & assistants | Tool-using agents (search, APIs, code) |
+| RAG Q&A over your docs (PDF/wiki/DB) | Multi-agent systems & workflows |
+| Summarize / extract / classify pipelines | Long-running flows with memory & retries |
+| Semantic search | Human-in-the-loop approval steps |
+| Content generation | Branching decision logic with cycles |
+
+> Rule of thumb: **linear pipeline → LangChain (LCEL); complex, stateful, looping/agent workflow → LangGraph.**
+
+---
+
+## Which version am I on?
+
+**"V1" = LangChain 1.x** — the modern framework, and what this project runs:
+
+```
+langchain 1.3.x · langchain-core 1.5.x · langchain-classic 1.0.x · langgraph 1.2.x
+```
+
+**Evolution in three phases:**
+
+| Phase | What it looked like |
+|-------|---------------------|
+| **0.x (early)** | One monolithic `langchain` package; pipelines built with legacy classes (`LLMChain`, `SequentialChain`, `ConversationChain`). |
+| **Modularization** | Split into focused packages: `langchain-core` (Runnables + LCEL), `langchain-openai`/`-anthropic` (providers), `langchain-community` (integrations). |
+| **1.0 "V1" (now)** | LCEL + Runnables are **the** way to build; legacy chain classes moved to **`langchain-classic`** (backward-compat only). |
+
+> **Takeaway:** Build everything with LCEL + Runnables (the `|` pipe). If a tutorial uses `LLMChain` / `SequentialChain`, that's pre-1.0 legacy — skip it. (`langchain-classic` still exists only for old code, e.g. `CacheBackedEmbeddings` in [05-rag-and-embeddings.md](05-rag-and-embeddings.md).)
 
 ---
 
 ## LangChain V1 architecture
 
 ```
-┌──────────────────────────────────┐
-│         Your Application         │
-├──────────────────────────────────┤
-│  Chains & Agents   (langchain)   │
-│   └─ LCEL: prompt | model | ...  │
-├──────────────────────────────────┤
-│  Runnables      (langchain-core) │  ← foundation of V1
-├──────────────────────────────────┤
-│  Model integrations              │
-│  (langchain-anthropic, -openai)  │
-└──────────────────────────────────┘
+              YOUR APP   (chatbot · RAG Q&A · agent …)
+                  ▲  built with
+   ┌──────────────┴──────────────────────────────────┐
+   │ Chains & Agents              (langchain)         │  ← orchestration
+   │   LCEL pipelines:  prompt | model | parser       │
+   ├──────────────────────────────────────────────────┤
+   │ Runnables + LCEL             (langchain-core)     │  ← foundation
+   │   one interface: invoke · batch · stream          │
+   ├──────────────────────────────────────────────────┤
+   │ Model & tool integrations                        │  ← plug-ins
+   │   langchain-openai · -anthropic · -community     │
+   └──────────────────────────────────────────────────┘
+                  ▲  talks to
+        LLM providers · vector stores · tools · APIs
 ```
+
+**How to read it (bottom → top):** integrations connect to the outside world (models, vector stores, tools); **`langchain-core`** wraps every piece as a **Runnable** with the same `invoke/batch/stream` interface; you compose those with **LCEL** into chains & agents; and those power your app. Each layer builds on the one below.
 
 **Runnables — the core idea:**
 - *Everything* is a runnable: prompts, models, output parsers, chains.
 - Unified interface: `.invoke()` (one input) · `.batch()` (many) · `.stream()` (chunks).
-- **LCEL** (LangChain Expression Language): chain runnables with the `|` pipe → concise, composable code. A chain is itself a runnable.
+- **LCEL:** chain runnables with the `|` pipe → concise, composable code. A chain is itself a runnable.
 
 ---
 

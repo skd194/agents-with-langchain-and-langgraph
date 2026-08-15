@@ -10,4 +10,6 @@ Quick-refresh reference docs. Read top-to-bottom to reload full context.
 | 4 | [04-document-loading.md](04-document-loading.md) | Document loaders (PDF/text/web/directory), Document objects, PDF loader options, chunking & text splitters |
 | 5 | [05-rag-and-embeddings.md](05-rag-and-embeddings.md) | RAG overview: why RAG, index/retrieve/generate, chunking, vs alternatives; vectors, similarity, embeddings + code; Chroma vector store |
 | 6 | [06-rag-pipeline.md](06-rag-pipeline.md) | Assembling the RAG chain: retriever + passthrough → grounding prompt → LLM; anti-hallucination, sources/citations |
+| 7 | [07-agents.md](07-agents.md) | Agents primer: chain vs agent, the ReAct tool loop, tools, `create_agent` (LangChain 1.x / LangGraph) |
+| — | [pydantic-reference.md](pydantic-reference.md) | Pydantic deep dive: `BaseModel`, `Field`, validators, load/dump, why LangChain uses it for structured output |
 | — | [imports-reference.md](imports-reference.md) | Every import used across the `.py` files and why — kept in sync with the code |

@@ -338,5 +338,5 @@ if __name__ == "__main__":
     # demo_basic_rag()
     # demo_rag_with_sources()
     # demo_rag_with_fallback()
-    # demo_structured_rag()
-    exercise_document_qa()
+    demo_structured_rag()
+    # exercise_document_qa()
